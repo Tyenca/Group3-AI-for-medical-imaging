@@ -42,6 +42,9 @@ from functools import partial
 from dataset import SliceDataset
 from ShallowNet import shallowCNN
 from ENet import ENet
+
+from UNet import UNet # New Unet implementation, improvement of the ENet architecture
+
 from utils import (Dcm,
                    class2one_hot,
                    probs2one_hot,
@@ -86,7 +89,15 @@ def setup(args) -> tuple[nn.Module, Any, Any, DataLoader, DataLoader, int]:
     K: int = datasets_params[args.dataset]['K']
     kernels: int = datasets_params[args.dataset]['kernels'] if 'kernels' in datasets_params[args.dataset] else 8
     factor: int = datasets_params[args.dataset]['factor'] if 'factor' in datasets_params[args.dataset] else 2
-    net = datasets_params[args.dataset]['net'](1, K, kernels=kernels, factor=factor)
+
+    # Modified to allow switching between ENet and UNet based on the command line argument
+    net_cls = datasets_params[args.dataset]['net']
+    if args.network == 'enet':
+        net_cls = ENet
+    elif args.network == 'unet':
+        net_cls = UNet
+
+    net = net_cls(1, K, kernels=kernels, factor=factor)
     net.init_weights()
     net.to(device)
 
@@ -245,6 +256,11 @@ def main():
     parser.add_argument('--debug', action='store_true',
                         help="Keep only a fraction (10 samples) of the datasets, "
                              "to test the logics around epochs and logging easily.")
+    
+    # Added parsing for the network argument to allow switching between ENet and UNet
+    parser.add_argument('--network', default=None, choices=['enet', 'unet'],
+                    help="Override the default network for this dataset "
+                         "(only applies to SEGTHOR/SEGTHOR_CLEAN).")
 
     args = parser.parse_args()
 
