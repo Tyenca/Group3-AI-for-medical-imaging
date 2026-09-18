@@ -24,6 +24,32 @@
   If `--network` is omitted, the dataset's default network (ENet) is
   used, so existing commands/scripts are unaffected.
 
+  **'2.5D input extension'**
+  A 2.5D input option was added on op of the existing Unet. We can now use three adjacent slices:
+  - previous slice
+  - current slice
+  - next slice
+
+  These are joined along the channel dimension, resulting in an input tensor of shape '[3, H, W]' instead of '[1, H, W]'. This gives the model its 2.5D context without replacing the 2D training with a full 3D network.
+
+  ## Implementation
+
+  dataset.py
+  - added an optional 'context_25d' argument to 'SliceDataset'
+  - Added function to retreive adjacent slices from the same patient
+  - Current slice is reused if a previous or next slice does not exist
+  - Three slices are joined in a 3-channel tensor
+
+  main.py
+  - Added a '--context_25d' cl flag
+  - When enabled 'SliceDataset' uses 2.5D input
+  - The network input dimension is automatically changed from 1 to 3 channels
+
+## Why 2.5D experiment
+
+The original SegTHOR volumes are 3D CT scans but the baseline preprocessing converts them to 2D slices. Using adjacent slices gives the network additional context while keeping the existing 2D UNet almost unchanged. This allows direct comparison between 2D Unet and 2.5D Unet while keeping the training procedure the same.
+
+
 ## Architecture chosen: dilated residual UNet
 
 A UNet (encoder/decoder with skip connections) rather than plain
@@ -90,6 +116,10 @@ reference since UNet's numbers will be compared against it.
 - [x] Confirm correct output shape with a plain torch tensor test
       (`net(torch.randn(2, 1, 256, 256))` → correct `[B, K, H, W]` shape)
 - [x] Quick `--debug` run and Full UNet training run on real SEGTHOR
+- [x] Add 2.5D adjacent slide input
+- [x] Add '--context_25d' flag
+- [x] Confirmed 2.5D input shape [3, 256, 256]
+- [x] Run full 2.5D Unet training
 
 ## How to run it
 
@@ -104,6 +134,9 @@ python main.py --dataset SEGTHOR --network unet --epoch 25 --dest results/segtho
 Compare `results/segthor/unet/best_epoch.txt` against the baseline
 ENet's `results/segthor/ce/best_epoch.txt` for a quick 2D sanity check
 (not the final 3D comparison number).
+
+## How to run 2.5D
+python main.py --dataset SEGTHOR --network unet --context_25d --epoch 25 --dest results/segthor/unet_25d --gpu
 
 ## References
 

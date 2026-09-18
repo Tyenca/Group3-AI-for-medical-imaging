@@ -97,7 +97,9 @@ def setup(args) -> tuple[nn.Module, Any, Any, DataLoader, DataLoader, int]:
     elif args.network == 'unet':
         net_cls = UNet
 
-    net = net_cls(1, K, kernels=kernels, factor=factor)
+    # 2D uses one input channel and 2.5D uses three input channels
+    input_channels = 3 if args.context_25d else 1
+    net = net_cls(in_dim=input_channels, out_dim=K, kernels=kernels, factor=factor)
     net.init_weights()
     net.to(device)
 
@@ -114,7 +116,11 @@ def setup(args) -> tuple[nn.Module, Any, Any, DataLoader, DataLoader, int]:
                              root_dir,
                              img_transform=img_transform,
                              gt_transform= partial(gt_transform, K),
-                             debug=args.debug)
+                             debug=args.debug,
+                             context_25d=args.context_25d  # Pass the context_25d argument to the dataset
+                             )    
+
+
     train_loader = DataLoader(train_set,
                               batch_size=B,
                               num_workers=5,
@@ -124,7 +130,9 @@ def setup(args) -> tuple[nn.Module, Any, Any, DataLoader, DataLoader, int]:
                            root_dir,
                            img_transform=img_transform,
                            gt_transform=partial(gt_transform, K),
-                           debug=args.debug)
+                           debug=args.debug,
+                           context_25d=args.context_25d  # Pass the context_25d argument to the dataset
+                           )
     val_loader = DataLoader(val_set,
                             batch_size=B,
                             num_workers=5,
@@ -261,6 +269,14 @@ def main():
     parser.add_argument('--network', default=None, choices=['enet', 'unet'],
                     help="Override the default network for this dataset "
                          "(only applies to SEGTHOR/SEGTHOR_CLEAN).")
+
+
+# Optional 2.5D mode
+    parser.add_argument(
+          '--context_25d',
+            action='store_true',
+            help="Use 2.5D context by including adjacent slices in the input."
+    )
 
     args = parser.parse_args()
 
