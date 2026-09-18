@@ -1,0 +1,73 @@
+#!/bin/bash
+#SBATCH --job-name=ai4mi_segthor
+#SBATCH --account=gpuuva084
+#SBATCH --partition=gpu_a100
+#SBATCH --gpus=1
+#SBATCH --cpus-per-task=9
+#SBATCH --time=04:00:00
+#SBATCH --output=slurm_logs/%x_%j.out
+#SBATCH --error=slurm_logs/%x_%j.err
+
+set -e
+
+mkdir -p slurm_logs
+
+module purge
+module load 2023
+module load Python/3.11.3-GCCcore-12.3.0
+
+source $HOME/ai4mi_venv/bin/activate
+
+cd $HOME/ai4mi_project
+
+echo "=== Job $SLURM_JOB_ID starting at $(date) ==="
+echo "Node: $SLURMD_NODENAME"
+nvidia-smi
+
+# --- Configuration ---
+VARIANT="zscore_skip"
+SLICE_FLAGS="--norm_mode zscore --skip_empty"
+EPOCHS=50
+
+SRC_DIR="data/segthor_part1_corrected"
+SLICE_DIR="data/SEGTHOR"
+RESULT_DIR="results/${VARIANT}"
+
+# --- 1. Slice ---
+if [ -d "${SLICE_DIR}" ]; then
+    echo ">>> Removing existing ${SLICE_DIR}"
+    rm -rf "${SLICE_DIR}"
+fi
+
+echo ">>> Slicing (${SLICE_FLAGS})"
+python slice_segthor.py \
+    --source_dir "${SRC_DIR}" \
+    --dest_dir "${SLICE_DIR}" \
+    --shape 256 256 \
+    --retains 4 \
+    --seed 0 \
+    --process -1 \
+    ${SLICE_FLAGS}
+
+echo ">>> Slice counts:"
+echo "    train img: $(ls ${SLICE_DIR}/train/img | wc -l)"
+echo "    val   img: $(ls ${SLICE_DIR}/val/img   | wc -l)"
+
+# --- 2. Train ---
+echo ">>> Training ${EPOCHS} epochs -> ${RESULT_DIR}"
+python main.py \
+    --dataset SEGTHOR \
+    --mode full \
+    --epochs ${EPOCHS} \
+    --dest "${RESULT_DIR}" \
+    --gpu
+
+# --- 3. Metrics ---
+echo ">>> Computing 3D metrics"
+python metrics_3d.py \
+    --pred-dir "${RESULT_DIR}/best_epoch/val" \
+    --gt-dir "${SLICE_DIR}/val/gt" \
+    --spacing-pkl "${SLICE_DIR}/spacing.pkl" \
+    --out-dir "${RESULT_DIR}/metrics"
+
+echo "=== Job $SLURM_JOB_ID finished at $(date) ==="
