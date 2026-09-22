@@ -95,7 +95,9 @@ def setup(args) -> tuple[nn.Module, Any, Any, DataLoader, DataLoader, int]:
 
     # Dataset part
     B: int = datasets_params[args.dataset]['B']
-    root_dir = Path("data") / args.dataset
+    # --data_dir lets two preprocessing variants of the same dataset live side by
+    # side, so their slice directories do not overwrite each other.
+    root_dir = args.data_dir if args.data_dir else Path("data") / args.dataset
 
 
 
@@ -245,8 +247,18 @@ def main():
     parser.add_argument('--debug', action='store_true',
                         help="Keep only a fraction (10 samples) of the datasets, "
                              "to test the logics around epochs and logging easily.")
+    parser.add_argument('--data_dir', type=Path, default=None,
+                        help="Directory holding the sliced data. Defaults to data/<dataset>. "
+                             "Set it to keep several preprocessing variants side by side.")
+    parser.add_argument('--seed', default=0, type=int,
+                        help="Seed for weight init and batch shuffling. Without it, two runs "
+                             "of the same config differ, and a gap between configs cannot be "
+                             "told apart from run-to-run noise.")
 
     args = parser.parse_args()
+
+    torch.manual_seed(args.seed)
+    np.random.seed(args.seed)
 
     pprint(args)
 

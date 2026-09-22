@@ -1,0 +1,78 @@
+#!/bin/bash
+# Slice the corrected volumes for one preprocessing variant.
+#
+#   sbatch slice.job baseline_minmax
+#   sbatch slice.job zscore_skip
+#
+# Each variant writes to its own directory, so the two can be sliced and trained
+# at the same time without overwriting each other.
+
+#SBATCH --job-name=ai4mi_slice
+#SBATCH --account=gpuuva084
+#SBATCH --partition=gpu_a100
+#SBATCH --gpus=1
+#SBATCH --cpus-per-task=9
+#SBATCH --time=00:30:00
+#SBATCH --output=slurm_logs/%x_%j.out
+#SBATCH --error=slurm_logs/%x_%j.err
+
+set -e
+
+mkdir -p slurm_logs
+
+module purge
+module load 2023
+module load Python/3.11.3-GCCcore-12.3.0
+
+source $HOME/ai4mi_venv/bin/activate
+
+cd $HOME/ai4mi_project
+
+VARIANT="${1:?Usage: sbatch slice.job <baseline_minmax|zscore_skip>}"
+
+case "${VARIANT}" in
+    baseline_minmax)
+        # Stock defaults: minmax normalization, every slice kept.
+        SLICE_FLAGS=""
+        ;;
+    zscore_skip)
+        # HU window plus zscore, and drop training slices with no organ.
+        SLICE_FLAGS="--norm_mode zscore --skip_empty"
+        ;;
+    zscore_noskip)
+        # zscore but every slice kept. Isolates which of the two changes is
+        # responsible for the surface distance regression.
+        SLICE_FLAGS="--norm_mode zscore"
+        ;;
+    *)
+        echo "ERROR: unknown variant '${VARIANT}'. Use baseline_minmax, zscore_skip or zscore_noskip." >&2
+        exit 1
+        ;;
+esac
+
+SRC_DIR="data/segthor_part1_corrected"
+SLICE_DIR="data/SEGTHOR_${VARIANT}"
+
+echo "=== Slice job $SLURM_JOB_ID, variant ${VARIANT}, starting at $(date) ==="
+echo ">>> Flags: '${SLICE_FLAGS}'"
+echo ">>> Destination: ${SLICE_DIR}"
+
+if [ -d "${SLICE_DIR}" ]; then
+    echo ">>> Removing existing ${SLICE_DIR}"
+    rm -rf "${SLICE_DIR}"
+fi
+
+python -u slice_segthor.py \
+    --source_dir "${SRC_DIR}" \
+    --dest_dir "${SLICE_DIR}" \
+    --shape 256 256 \
+    --retains 4 \
+    --seed 0 \
+    --process -1 \
+    ${SLICE_FLAGS}
+
+echo ">>> Slice counts:"
+echo "    train img: $(ls ${SLICE_DIR}/train/img | wc -l)"
+echo "    val   img: $(ls ${SLICE_DIR}/val/img   | wc -l)"
+
+echo "=== Slice job $SLURM_JOB_ID, variant ${VARIANT}, finished at $(date) ==="
