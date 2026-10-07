@@ -36,6 +36,7 @@ import torch.nn.functional as F
 from torch import nn, Tensor
 from torchvision import transforms
 from torch.utils.data import DataLoader
+import random, pickle
 
 from functools import partial 
 
@@ -51,6 +52,12 @@ from utils import (Dcm,
                    save_images)
 
 from losses import (CrossEntropy)
+
+# Worker initialization function for DataLoader reproducibility
+def worker_init_fn(worker_id):
+    worker_seed = torch.initial_seed() % 2**32
+    np.random.seed(worker_seed)
+    random.seed(worker_seed)
 
 datasets_params: dict[str, dict[str, Any]] = {}
 # K for the number of classes
@@ -78,6 +85,8 @@ def gt_transform(K, img):
         return img[0]
 
 def setup(args) -> tuple[nn.Module, Any, Any, DataLoader, DataLoader, int]:
+
+
     # Networks and scheduler
     gpu: bool = args.gpu and torch.cuda.is_available()
     device = torch.device("cuda") if gpu else torch.device("cpu")
@@ -99,17 +108,17 @@ def setup(args) -> tuple[nn.Module, Any, Any, DataLoader, DataLoader, int]:
     # side, so their slice directories do not overwrite each other.
     root_dir = args.data_dir if args.data_dir else Path("data") / args.dataset
 
-
-
     train_set = SliceDataset('train',
                              root_dir,
                              img_transform=img_transform,
                              gt_transform= partial(gt_transform, K),
                              debug=args.debug)
+    
     train_loader = DataLoader(train_set,
-                              batch_size=B,
-                              num_workers=5,
-                              shuffle=True)
+                            batch_size=B,
+                            num_workers=5,
+                            shuffle=True,
+                            worker_init_fn=worker_init_fn)
 
     val_set = SliceDataset('val',
                            root_dir,
@@ -119,9 +128,23 @@ def setup(args) -> tuple[nn.Module, Any, Any, DataLoader, DataLoader, int]:
     val_loader = DataLoader(val_set,
                             batch_size=B,
                             num_workers=5,
-                            shuffle=False)
+                            shuffle=False,
+                            worker_init_fn=worker_init_fn)
 
     args.dest.mkdir(parents=True, exist_ok=True)
+
+    # Extract and save train/val split
+    train_patient_ids = sorted(set(Path(f[0]).stem.split('_')[0] for f in train_set.files))
+    val_patient_ids = sorted(set(Path(f[0]).stem.split('_')[0] for f in val_set.files))
+
+    split_dict = {
+        'train': train_patient_ids,
+        'val': val_patient_ids,
+        'seed': args.seed
+    }
+
+    with open(args.dest / "train_val_split.pkl", 'wb') as f:
+        pickle.dump(split_dict, f, pickle.HIGHEST_PROTOCOL)
 
     return (net, optimizer, device, train_loader, val_loader, K)
 
@@ -257,8 +280,10 @@ def main():
 
     args = parser.parse_args()
 
-    torch.manual_seed(args.seed)
+    random.seed(args.seed)
     np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    torch.cuda.manual_seed_all(args.seed)
 
     pprint(args)
 
