@@ -1,0 +1,88 @@
+#!/bin/bash
+# Train one preprocessing variant with one seed, then compute its 3D metrics.
+#
+#   sbatch -J baseline_s1 train.job baseline_minmax 1
+#   sbatch -J zscore_s1   train.job zscore_skip     1
+#
+# Slicing is done once per variant by slice.job, so repeat seeds reuse the same
+# sliced data and never overwrite each other. Results land in
+# results/<variant>_seed<seed>/, which makes every run self identifying.
+
+#SBATCH --job-name=ai4mi_train
+#SBATCH --account=gpuuva084
+#SBATCH --partition=gpu_a100
+#SBATCH --gpus=1
+#SBATCH --cpus-per-task=9
+#SBATCH --time=04:00:00
+#SBATCH --output=slurm_logs/%x_%j.out
+#SBATCH --error=slurm_logs/%x_%j.err
+
+set -e
+
+mkdir -p slurm_logs
+
+module purge
+module load 2023
+module load Python/3.11.3-GCCcore-12.3.0
+
+source $HOME/ai4mi_venv/bin/activate
+
+cd $HOME/ai4mi_project
+
+VARIANT="${1:?Usage: sbatch train.job <baseline_minmax|zscore_skip> <seed>}"
+SEED="${2:?Usage: sbatch train.job <baseline_minmax|zscore_skip> <seed>}"
+
+case "${VARIANT}" in
+    baseline_minmax|zscore_skip|zscore_noskip) ;;
+    *)
+        echo "ERROR: unknown variant '${VARIANT}'. Use baseline_minmax, zscore_skip or zscore_noskip." >&2
+        exit 1
+        ;;
+esac
+
+EPOCHS=50
+SLICE_DIR="data/SEGTHOR_${VARIANT}"
+RESULT_DIR="results/${VARIANT}_seed${SEED}"
+
+echo "=== Job $SLURM_JOB_ID, variant ${VARIANT}, seed ${SEED}, starting at $(date) ==="
+echo "Node: $SLURMD_NODENAME"
+nvidia-smi
+
+if [ ! -d "${SLICE_DIR}/train/img" ]; then
+    echo "ERROR: ${SLICE_DIR} not found. Run 'sbatch slice.job ${VARIANT}' first." >&2
+    exit 1
+fi
+
+# Record provenance inside the result directory, so a finished run can always be
+# traced back to the preprocessing it actually used.
+mkdir -p "${RESULT_DIR}"
+{
+    echo "variant:      ${VARIANT}"
+    echo "seed:         ${SEED}"
+    echo "slice_dir:    ${SLICE_DIR}"
+    echo "epochs:       ${EPOCHS}"
+    echo "train_slices: $(ls ${SLICE_DIR}/train/img | wc -l)"
+    echo "val_slices:   $(ls ${SLICE_DIR}/val/img | wc -l)"
+    echo "slurm_job:    ${SLURM_JOB_ID}"
+    echo "started:      $(date)"
+} > "${RESULT_DIR}/run_config.txt"
+cat "${RESULT_DIR}/run_config.txt"
+
+echo ">>> Training ${EPOCHS} epochs on ${SLICE_DIR} -> ${RESULT_DIR}"
+python -u main.py \
+    --dataset SEGTHOR \
+    --data_dir "${SLICE_DIR}" \
+    --mode full \
+    --epochs ${EPOCHS} \
+    --dest "${RESULT_DIR}" \
+    --seed "${SEED}" \
+    --gpu
+
+echo ">>> Computing 3D metrics"
+python -u metrics_3d.py \
+    --pred-dir "${RESULT_DIR}/best_epoch/val" \
+    --gt-dir "${SLICE_DIR}/val/gt" \
+    --spacing-pkl "${SLICE_DIR}/spacing.pkl" \
+    --out-dir "${RESULT_DIR}/metrics"
+
+echo "=== Job $SLURM_JOB_ID, variant ${VARIANT}, seed ${SEED}, finished at $(date) ==="
