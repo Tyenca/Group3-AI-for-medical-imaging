@@ -134,9 +134,9 @@ def setup(args) -> tuple[nn.Module, Any, Any, DataLoader, DataLoader, int]:
     args.dest.mkdir(parents=True, exist_ok=True)
 
     # Extract and save train/val split
-    train_patient_ids = sorted(set(Path(f[0]).stem.split('_')[0] for f in train_set.files))
-    val_patient_ids = sorted(set(Path(f[0]).stem.split('_')[0] for f in val_set.files))
-
+    train_patient_ids = sorted(set(Path(f[0]).stem.rsplit('_', 1)[0] for f in train_set.files))
+    val_patient_ids = sorted(set(Path(f[0]).stem.rsplit('_', 1)[0] for f in val_set.files))
+    
     split_dict = {
         'train': train_patient_ids,
         'val': val_patient_ids,
