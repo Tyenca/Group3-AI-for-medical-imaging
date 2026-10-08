@@ -36,6 +36,7 @@ import torch.nn.functional as F
 from torch import nn, Tensor
 from torchvision import transforms
 from torch.utils.data import DataLoader, WeightedRandomSampler
+from augment import SliceAugmentor
 from PIL import Image
 import random, pickle
 
@@ -157,7 +158,8 @@ def setup(args) -> tuple[nn.Module, Any, Any, DataLoader, DataLoader, int]:
     train_set = SliceDataset('train',
                              root_dir,
                              img_transform=img_transform,
-                             gt_transform= partial(gt_transform, K),
+                             gt_transform=partial(gt_transform, K),
+                             augment=args.augment,
                              debug=args.debug)
     if args.sampling == "oversample":
         train_loader = DataLoader(train_set,
@@ -350,6 +352,11 @@ def main():
                              "oversample = draw foreground slices more often")
     parser.add_argument('--fg_ratio', type=float, default=0.66,
                         help="Target fraction of each batch containing an organ")
+
+    parser.add_argument('--augment', action='store_true',
+                        help="Random affine and elastic deformation on the "
+                             "training slices, following the SegTHOR paper. "
+                             "Labels are resampled nearest-neighbour.")
 
     args = parser.parse_args()
 
