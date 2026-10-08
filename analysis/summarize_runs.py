@@ -2,8 +2,8 @@
 
 Works with a single run (preliminary result) or several seeds (mean and spread).
 
-    python summarize_runs.py results/baseline_minmax_seed1/metrics
-    python summarize_runs.py results/baseline_minmax_seed*/metrics
+    python analysis/summarize_runs.py results/baseline_minmax_seed1/metrics
+    python analysis/summarize_runs.py results/baseline_minmax_seed*/metrics
 """
 
 import sys
