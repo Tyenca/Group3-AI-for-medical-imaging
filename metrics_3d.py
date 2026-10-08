@@ -67,8 +67,11 @@ import numpy as np
 from PIL import Image
 from scipy import ndimage as ndi
 
+from skimage.morphology import skeletonize
+
 CLASS_NAMES = {0: "background", 1: "esophagus", 2: "heart", 3: "trachea", 4: "aorta"}
 K = 5
+CENTERLINE_CLASSES = {1, 3, 4} # esophagus, trachea and aorta
 LABEL_MULT = 63  # slice_segthor.py encodes classes as {0, 63, 126, 189, 252}
 
 # Filenames look like Patient_01_0123.png
@@ -128,6 +131,22 @@ def dice_3d(gt: np.ndarray, pred: np.ndarray) -> float:
     return float(2.0 * inter / denom)
 
 
+def cldice_3d(gt: np.ndarray, pred: np.ndarray) -> float:
+    """" 3D centerline Dice (clDice) for one binary mask pair. """
+
+    gt_skeleton = skeletonize(gt)
+    pred_skeleton = skeletonize(pred)
+
+    tprec = np.logical_and(pred_skeleton, gt).sum() / pred_skeleton.sum()
+    tsens = np.logical_and(gt_skeleton, pred).sum() / gt_skeleton.sum() 
+
+    if tprec + tsens == 0:
+        return 0.0
+
+    return float(2 * tprec * tsens / (tprec + tsens))
+
+
+
 def surface_voxels(mask: np.ndarray) -> np.ndarray:
     """Voxels of the mask that touch its boundary (6-connectivity erosion)."""
     if not mask.any():
@@ -164,6 +183,7 @@ def evaluate_pair(gt_vol: np.ndarray, pred_vol: np.ndarray,
         pred_k = pred_vol == k
 
         entry: dict[str, float | str] = {}
+        entry["cldice"] = np.nan
 
         if not gt_k.any() and not pred_k.any():
             entry["dice"] = np.nan
@@ -171,10 +191,14 @@ def evaluate_pair(gt_vol: np.ndarray, pred_vol: np.ndarray,
             entry["case"] = "both_empty"
         elif not gt_k.any() or not pred_k.any():
             entry["dice"] = 0.0
+            if k in CENTERLINE_CLASSES:
+                entry["cldice"] = 0.0
             entry["hd"] = entry["hd95"] = entry["assd"] = np.nan
             entry["case"] = "one_empty"
         else:
             entry["dice"] = dice_3d(gt_k, pred_k)
+            if k in CENTERLINE_CLASSES:
+                entry["cldice"] = cldice_3d(gt_k, pred_k)
             dists = surface_distances(gt_k, pred_k, spacing)
             if dists is None or dists.size == 0:
                 entry["hd"] = entry["hd95"] = entry["assd"] = np.nan
@@ -309,7 +333,9 @@ def main():
             for k in range(1, K))
         print(f"  {patient}: {summary}")
 
+    
     print_table(all_results, "dice", "3D Dice score (higher is better)")
+    print_table(all_results, "cldice", "3D Centerline Dice score (higher is better)")
     print_table(all_results, "hd95", "95th-percentile Hausdorff distance, mm (lower is better)", "{:.2f}")
     print_table(all_results, "assd", "Average symmetric surface distance, mm (lower is better)", "{:.2f}")
     print_table(all_results, "hd", "Hausdorff distance, mm (lower is better)", "{:.2f}")
@@ -318,7 +344,7 @@ def main():
     # Save one .npz per metric, shape (n_patients, K), matching the
     # metric01.npz / metric02.npz layout the submission archive expects.
     patient_list = sorted(all_results)
-    for metric in ["dice", "hd", "hd95", "assd"]:
+    for metric in ["dice", "cldice", "hd", "hd95", "assd"]:
         arr = np.full((len(patient_list), K), np.nan, dtype=np.float32)
         for i, p in enumerate(patient_list):
             for k in range(K):
