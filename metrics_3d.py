@@ -136,9 +136,12 @@ def cldice_3d(gt: np.ndarray, pred: np.ndarray) -> float:
 
     gt_skeleton = skeletonize(gt)
     pred_skeleton = skeletonize(pred)
+    if gt_skeleton.sum() == 0 or pred_skeleton.sum() == 0:
+        return 0.0
 
     tprec = np.logical_and(pred_skeleton, gt).sum() / pred_skeleton.sum()
-    tsens = np.logical_and(gt_skeleton, pred).sum() / gt_skeleton.sum() 
+    tsens = np.logical_and(gt_skeleton, pred).sum() / gt_skeleton.sum()
+
 
     if tprec + tsens == 0:
         return 0.0
