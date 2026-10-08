@@ -1,12 +1,16 @@
 #!/bin/bash
-# Train one preprocessing variant with one seed, then compute its 3D metrics.
+# Train one configuration with one seed, then compute its 3D metrics.
 #
-#   sbatch -J baseline_s1 train.job baseline_minmax 1
-#   sbatch -J zscore_s1   train.job zscore_skip     1
+#   sbatch -J base_s1 train.job baseline 1
+#   sbatch -J prep_s1 train.job zscore   1 oversample
 #
-# Slicing is done once per variant by slice.job, so repeat seeds reuse the same
-# sliced data and never overwrite each other. Results land in
-# results/<variant>_seed<seed>/, which makes every run self identifying.
+# Arguments: <variant> <seed> [sampling]
+#   variant  which sliced directory to train on (see slice.job)
+#   seed     1, 2 or 3. Always run all three: a single run is not evidence.
+#   sampling uniform (default) or oversample
+#
+# Results land in results/<variant>[_oversample]_seed<seed>/, so every run is
+# self identifying and runs never overwrite each other.
 
 #SBATCH --job-name=ai4mi_train
 #SBATCH --account=gpuuva084
@@ -19,6 +23,8 @@
 
 set -e
 
+EPOCHS=50
+
 mkdir -p slurm_logs
 
 module purge
@@ -27,24 +33,37 @@ module load Python/3.11.3-GCCcore-12.3.0
 
 source $HOME/ai4mi_venv/bin/activate
 
-cd $HOME/ai4mi_project
+cd "${SLURM_SUBMIT_DIR:-$HOME/Group3-AI-for-medical-imaging}"
 
-VARIANT="${1:?Usage: sbatch train.job <baseline_minmax|zscore_skip> <seed>}"
-SEED="${2:?Usage: sbatch train.job <baseline_minmax|zscore_skip> <seed>}"
+VARIANT="${1:?Usage: sbatch train.job <variant> <seed> [uniform|oversample]}"
+SEED="${2:?Usage: sbatch train.job <variant> <seed> [uniform|oversample]}"
+SAMPLING="${3:-uniform}"
 
 case "${VARIANT}" in
-    baseline_minmax|zscore_skip|zscore_noskip) ;;
+    baseline|zscore|zscore_skip) ;;
     *)
-        echo "ERROR: unknown variant '${VARIANT}'. Use baseline_minmax, zscore_skip or zscore_noskip." >&2
+        echo "ERROR: unknown variant '${VARIANT}'. Use baseline, zscore or zscore_skip." >&2
         exit 1
         ;;
 esac
 
-EPOCHS=50
-SLICE_DIR="data/SEGTHOR_${VARIANT}"
-RESULT_DIR="results/${VARIANT}_seed${SEED}"
+case "${SAMPLING}" in
+    uniform|oversample) ;;
+    *)
+        echo "ERROR: sampling must be uniform or oversample, got '${SAMPLING}'." >&2
+        exit 1
+        ;;
+esac
 
-echo "=== Job $SLURM_JOB_ID, variant ${VARIANT}, seed ${SEED}, starting at $(date) ==="
+SLICE_DIR="data/SEGTHOR_${VARIANT}"
+
+if [ "${SAMPLING}" = "oversample" ]; then
+    RESULT_DIR="results/${VARIANT}_oversample_seed${SEED}"
+else
+    RESULT_DIR="results/${VARIANT}_seed${SEED}"
+fi
+
+echo "=== Job $SLURM_JOB_ID: ${VARIANT}, sampling=${SAMPLING}, seed ${SEED}, $(date) ==="
 echo "Node: $SLURMD_NODENAME"
 nvidia-smi
 
@@ -53,16 +72,23 @@ if [ ! -d "${SLICE_DIR}/train/img" ]; then
     exit 1
 fi
 
-# Record provenance inside the result directory, so a finished run can always be
-# traced back to the preprocessing it actually used.
+# Oversampling needs the empty slices to still be there to down-weight them.
+if [ "${SAMPLING}" = "oversample" ] && [ "${VARIANT}" = "zscore_skip" ]; then
+    echo "ERROR: zscore_skip already removed the empty slices, so there is" >&2
+    echo "       nothing for oversampling to down-weight. Use the zscore variant." >&2
+    exit 1
+fi
+
 mkdir -p "${RESULT_DIR}"
 {
     echo "variant:      ${VARIANT}"
+    echo "sampling:     ${SAMPLING}"
     echo "seed:         ${SEED}"
     echo "slice_dir:    ${SLICE_DIR}"
     echo "epochs:       ${EPOCHS}"
     echo "train_slices: $(ls ${SLICE_DIR}/train/img | wc -l)"
     echo "val_slices:   $(ls ${SLICE_DIR}/val/img | wc -l)"
+    echo "git_commit:   $(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
     echo "slurm_job:    ${SLURM_JOB_ID}"
     echo "started:      $(date)"
 } > "${RESULT_DIR}/run_config.txt"
@@ -76,6 +102,7 @@ python -u main.py \
     --epochs ${EPOCHS} \
     --dest "${RESULT_DIR}" \
     --seed "${SEED}" \
+    --sampling "${SAMPLING}" \
     --gpu
 
 echo ">>> Computing 3D metrics"
@@ -85,4 +112,4 @@ python -u metrics_3d.py \
     --spacing-pkl "${SLICE_DIR}/spacing.pkl" \
     --out-dir "${RESULT_DIR}/metrics"
 
-echo "=== Job $SLURM_JOB_ID, variant ${VARIANT}, seed ${SEED}, finished at $(date) ==="
+echo "=== Job $SLURM_JOB_ID finished at $(date) ==="
