@@ -332,6 +332,8 @@ def main():
                         help="Destination directory to save the results (predictions and weights).")
 
     parser.add_argument('--gpu', action='store_true')
+    parser.add_argument("--track_co2", action="store_true", 
+                        help="Track energy use and CO2 emissions during the run.")
     parser.add_argument('--debug', action='store_true',
                         help="Keep only a fraction (10 samples) of the datasets, "
                              "to test the logics around epochs and logging easily.")
@@ -358,7 +360,24 @@ def main():
 
     pprint(args)
 
-    runTraining(args)
+    if args.track_co2:
+        from codecarbon import OfflineEmissionsTracker, OutputMethod
+
+        args.dest.mkdir(parents=True, exist_ok=True)
+        tracker = OfflineEmissionsTracker(project_name="Medical Imaging Segmentation", country_iso_code="NLD", 
+                                          output_dir=str(args.dest), output_file="emissions.csv", 
+                                          output_methods=[OutputMethod.CSV], measure_power_secs=10)
+        tracker.start()
+
+        try:
+            runTraining(args)
+        finally:
+            emissions = tracker.stop()
+
+        if emissions is not None:
+            print(f"Total CO2 emissions: {emissions:.6f} kg CO2eq")
+    else:
+        runTraining(args)
 
 
 if __name__ == '__main__':
