@@ -35,7 +35,8 @@ import numpy as np
 import torch.nn.functional as F
 from torch import nn, Tensor
 from torchvision import transforms
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, WeightedRandomSampler
+from PIL import Image
 import random, pickle
 
 from functools import partial 
@@ -83,7 +84,44 @@ def gt_transform(K, img):
         img = torch.tensor(img, dtype=torch.int64)[None, ...]  # Add one dimension to simulate batch
         img = class2one_hot(img, K=K)
         return img[0]
+def foreground_flags(dataset) -> np.ndarray:
+    """True for each slice whose ground truth contains at least one organ.
 
+    The GT PNGs hold the x63 encoding, so any non-zero pixel means an
+    organ is present and no decoding is needed.
+    """
+    flags = np.zeros(len(dataset.files), dtype=bool)
+    for i, (_, gt_path) in enumerate(dataset.files):
+        flags[i] = bool(np.any(np.array(Image.open(gt_path)) > 0))
+    return flags
+
+
+def build_sampler(dataset, fg_ratio: float, seed: int) -> WeightedRandomSampler:
+    """Draw roughly `fg_ratio` of each batch from slices containing an organ.
+
+    Unlike dropping empty slices, the model still sees empty space, so it
+    keeps learning to predict nothing there. One epoch still draws
+    len(dataset) slices, so the number of gradient steps is unchanged and
+    the comparison against the baseline stays fair.
+    """
+    fg = foreground_flags(dataset)
+    n_fg, n_bg = int(fg.sum()), int((~fg).sum())
+    print(f">> Sampler: {n_fg} slices with an organ, {n_bg} without; "
+          f"targeting {fg_ratio:.0%} foreground per batch")
+
+    if n_fg == 0 or n_bg == 0:
+        raise ValueError("Oversampling needs both foreground and empty slices. "
+                         "Was this dataset sliced with --skip_empty?")
+
+    weights = np.where(fg, fg_ratio / n_fg, (1.0 - fg_ratio) / n_bg)
+
+    g = torch.Generator()
+    g.manual_seed(seed)
+    return WeightedRandomSampler(
+        weights=torch.as_tensor(weights, dtype=torch.double),
+        num_samples=len(dataset),
+        replacement=True,
+        generator=g)
 def setup(args) -> tuple[nn.Module, Any, Any, DataLoader, DataLoader, int]:
 
 
@@ -113,12 +151,18 @@ def setup(args) -> tuple[nn.Module, Any, Any, DataLoader, DataLoader, int]:
                              img_transform=img_transform,
                              gt_transform= partial(gt_transform, K),
                              debug=args.debug)
-    
-    train_loader = DataLoader(train_set,
-                            batch_size=B,
-                            num_workers=5,
-                            shuffle=True,
-                            worker_init_fn=worker_init_fn)
+    if args.sampling == "oversample":
+        train_loader = DataLoader(train_set,
+                                  batch_size=B,
+                                  num_workers=5,
+                                  sampler=build_sampler(train_set, args.fg_ratio, args.seed),
+                                  worker_init_fn=worker_init_fn)
+    else:
+        train_loader = DataLoader(train_set,
+                                  batch_size=B,
+                                  num_workers=5,
+                                  shuffle=True,
+                                  worker_init_fn=worker_init_fn)
 
     val_set = SliceDataset('val',
                            root_dir,
@@ -277,6 +321,12 @@ def main():
                         help="Seed for weight init and batch shuffling. Without it, two runs "
                              "of the same config differ, and a gap between configs cannot be "
                              "told apart from run-to-run noise.")
+    parser.add_argument('--sampling', default='uniform',
+                        choices=['uniform', 'oversample'],
+                        help="uniform = every slice equally likely (default); "
+                             "oversample = draw foreground slices more often")
+    parser.add_argument('--fg_ratio', type=float, default=0.66,
+                        help="Target fraction of each batch containing an organ")
 
     args = parser.parse_args()
 
