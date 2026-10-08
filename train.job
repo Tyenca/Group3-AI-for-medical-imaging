@@ -118,6 +118,7 @@ python -u main.py \
     --seed "${SEED}" \
     --sampling "${SAMPLING}" \
     --loss "${LOSS}" \
+    --track_co2 \
     --gpu
 
 echo ">>> Computing 3D metrics"
