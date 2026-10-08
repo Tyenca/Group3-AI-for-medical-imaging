@@ -3,6 +3,7 @@
 #
 #   sbatch -J baseline_s1 train.job baseline_minmax 1
 #   sbatch -J zscore_s1   train.job zscore_skip     1
+#   sbatch -J dicece_s1   train.job baseline_minmax 1 dicece
 #
 # Slicing is done once per variant by slice.job, so repeat seeds reuse the same
 # sliced data and never overwrite each other. Results land in
@@ -31,6 +32,7 @@ cd $HOME/ai4mi_project
 
 VARIANT="${1:?Usage: sbatch train.job <baseline_minmax|zscore_skip> <seed>}"
 SEED="${2:?Usage: sbatch train.job <baseline_minmax|zscore_skip> <seed>}"
+LOSS="${3:-ce}"
 
 case "${VARIANT}" in
     baseline_minmax|zscore_skip|zscore_noskip) ;;
@@ -43,6 +45,7 @@ esac
 EPOCHS=50
 SLICE_DIR="data/SEGTHOR_${VARIANT}"
 RESULT_DIR="results/${VARIANT}_seed${SEED}"
+[ "${LOSS}" != ce ] && RESULT_DIR="results/${VARIANT}_${LOSS}_seed${SEED}"
 
 echo "=== Job $SLURM_JOB_ID, variant ${VARIANT}, seed ${SEED}, starting at $(date) ==="
 echo "Node: $SLURMD_NODENAME"
@@ -59,6 +62,7 @@ mkdir -p "${RESULT_DIR}"
 {
     echo "variant:      ${VARIANT}"
     echo "seed:         ${SEED}"
+    echo "loss:         ${LOSS}"
     echo "slice_dir:    ${SLICE_DIR}"
     echo "epochs:       ${EPOCHS}"
     echo "train_slices: $(ls ${SLICE_DIR}/train/img | wc -l)"
@@ -76,6 +80,7 @@ python -u main.py \
     --epochs ${EPOCHS} \
     --dest "${RESULT_DIR}" \
     --seed "${SEED}" \
+    --loss "${LOSS}" \
     --gpu
 
 echo ">>> Computing 3D metrics"
