@@ -1,15 +1,17 @@
 #!/bin/bash
 # Train one configuration with one seed, then compute its 3D metrics.
 #
-#   sbatch -J base_s1 train.job baseline 1
-#   sbatch -J prep_s1 train.job zscore   1 oversample
+#   sbatch -J base_s1   train.job baseline 1
+#   sbatch -J prep_s1   train.job zscore   1 oversample
+#   sbatch -J dicece_s1 train.job baseline 1 uniform dicece
 #
-# Arguments: <variant> <seed> [sampling]
+# Arguments: <variant> <seed> [sampling] [loss]
 #   variant  which sliced directory to train on (see slice.job)
 #   seed     1, 2 or 3. Always run all three: a single run is not evidence.
 #   sampling uniform (default) or oversample
+#   loss     ce (default), wce, focal or dicece
 #
-# Results land in results/<variant>[_oversample]_seed<seed>/, so every run is
+# Results land in results/<variant>[_oversample][_<loss>]_seed<seed>/, so every run is
 # self identifying and runs never overwrite each other.
 
 #SBATCH --job-name=ai4mi_train
@@ -35,9 +37,10 @@ source $HOME/ai4mi_venv/bin/activate
 
 cd "${SLURM_SUBMIT_DIR:-$HOME/Group3-AI-for-medical-imaging}"
 
-VARIANT="${1:?Usage: sbatch train.job <variant> <seed> [uniform|oversample]}"
-SEED="${2:?Usage: sbatch train.job <variant> <seed> [uniform|oversample]}"
+VARIANT="${1:?Usage: sbatch train.job <variant> <seed> [uniform|oversample] [loss]}"
+SEED="${2:?Usage: sbatch train.job <variant> <seed> [uniform|oversample] [loss]}"
 SAMPLING="${3:-uniform}"
+LOSS="${4:-ce}"
 
 case "${VARIANT}" in
     baseline|zscore|zscore_skip) ;;
@@ -55,15 +58,25 @@ case "${SAMPLING}" in
         ;;
 esac
 
+case "${LOSS}" in
+    ce|wce|focal|dicece) ;;
+    *)
+        echo "ERROR: loss must be ce, wce, focal or dicece, got '${LOSS}'." >&2
+        exit 1
+        ;;
+esac
+
 SLICE_DIR="data/SEGTHOR_${VARIANT}"
 
 if [ "${SAMPLING}" = "oversample" ]; then
-    RESULT_DIR="results/${VARIANT}_oversample_seed${SEED}"
+    RESULT_DIR="results/${VARIANT}_oversample"
 else
-    RESULT_DIR="results/${VARIANT}_seed${SEED}"
+    RESULT_DIR="results/${VARIANT}"
 fi
+[ "${LOSS}" != ce ] && RESULT_DIR="${RESULT_DIR}_${LOSS}"
+RESULT_DIR="${RESULT_DIR}_seed${SEED}"
 
-echo "=== Job $SLURM_JOB_ID: ${VARIANT}, sampling=${SAMPLING}, seed ${SEED}, $(date) ==="
+echo "=== Job $SLURM_JOB_ID: ${VARIANT}, sampling=${SAMPLING}, loss=${LOSS}, seed ${SEED}, $(date) ==="
 echo "Node: $SLURMD_NODENAME"
 nvidia-smi
 
@@ -84,6 +97,7 @@ mkdir -p "${RESULT_DIR}"
     echo "variant:      ${VARIANT}"
     echo "sampling:     ${SAMPLING}"
     echo "seed:         ${SEED}"
+    echo "loss:         ${LOSS}"
     echo "slice_dir:    ${SLICE_DIR}"
     echo "epochs:       ${EPOCHS}"
     echo "train_slices: $(ls ${SLICE_DIR}/train/img | wc -l)"
@@ -103,6 +117,7 @@ python -u main.py \
     --dest "${RESULT_DIR}" \
     --seed "${SEED}" \
     --sampling "${SAMPLING}" \
+    --loss "${LOSS}" \
     --gpu
 
 echo ">>> Computing 3D metrics"

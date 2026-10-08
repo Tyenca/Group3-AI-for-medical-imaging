@@ -52,7 +52,7 @@ from utils import (Dcm,
                    dice_coef,
                    save_images)
 
-from losses import (CrossEntropy)
+from losses import (CrossEntropy, DiceCE)
 
 # Worker initialization function for DataLoader reproducibility
 def worker_init_fn(worker_id):
@@ -84,6 +84,14 @@ def gt_transform(K, img):
         img = torch.tensor(img, dtype=torch.int64)[None, ...]  # Add one dimension to simulate batch
         img = class2one_hot(img, K=K)
         return img[0]
+
+def class_weights(dataset) -> Tensor:
+    # ENet paper weighting, w = 1 / ln(1.02 + class frequency), counted on the training split only
+    counts = sum(dataset.gt_transform(Image.open(gt)).sum((1, 2)) for _, gt in dataset.files)
+    weights = 1 / torch.log(1.02 + counts / counts.sum())
+    print(f">> Class weights {weights.tolist()}")
+    return weights
+
 def foreground_flags(dataset) -> np.ndarray:
     """True for each slice whose ground truth contains at least one organ.
 
@@ -198,11 +206,21 @@ def runTraining(args):
     net, optimizer, device, train_loader, val_loader, K = setup(args)
 
     if args.mode == "full":
-        loss_fn = CrossEntropy(idk=list(range(K)))  # Supervise both background and foreground
+        idk = list(range(K))  # Supervise both background and foreground
     elif args.mode in ["partial"] and args.dataset == 'SEGTHOR':
-        loss_fn = CrossEntropy(idk=[0, 1, 3, 4])  # Do not supervise the heart (class 2)
+        idk = [0, 1, 3, 4]  # Do not supervise the heart (class 2)
     else:
         raise ValueError(args.mode, args.dataset)
+
+    match args.loss:
+        case 'ce':
+            loss_fn = CrossEntropy(idk=idk)
+        case 'wce':
+            loss_fn = CrossEntropy(idk=idk, weights=class_weights(train_loader.dataset).to(device))
+        case 'focal':
+            loss_fn = CrossEntropy(idk=idk, gamma=2)
+        case 'dicece':
+            loss_fn = DiceCE(idk=idk)
 
     # Notice one has the length of the _loader_, and the other one of the _dataset_
     log_loss_tra: Tensor = torch.zeros((args.epochs, len(train_loader)))
@@ -307,6 +325,9 @@ def main():
     parser.add_argument('--epochs', default=20, type=int)
     parser.add_argument('--dataset', default='TOY2', choices=datasets_params.keys())
     parser.add_argument('--mode', default='full', choices=['partial', 'full'])
+    parser.add_argument('--loss', default='ce', choices=['ce', 'wce', 'focal', 'dicece'],
+                        help="ce is the baseline. wce weights classes by training frequency, "
+                             "focal uses gamma 2, dicece adds soft Dice to ce.")
     parser.add_argument('--dest', type=Path, required=True,
                         help="Destination directory to save the results (predictions and weights).")
 
