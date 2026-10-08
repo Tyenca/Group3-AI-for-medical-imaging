@@ -25,6 +25,8 @@
 from pathlib import Path
 from typing import Callable, Union
 
+import numpy as np
+import torch
 from torch import Tensor
 from PIL import Image
 from torch.utils.data import Dataset
@@ -52,7 +54,8 @@ def make_dataset(root, subset) -> list[tuple[Path, Path | None]]:
 
 class SliceDataset(Dataset):
     def __init__(self, subset, root_dir, img_transform=None,
-                 gt_transform=None, augment=False, equalize=False, debug=False):
+                 gt_transform=None, augment=False, equalize=False, debug=False,
+                 context_slices=1):
         self.root_dir: str = root_dir
         self.img_transform: Callable = img_transform
         self.gt_transform: Callable = gt_transform
@@ -61,6 +64,7 @@ class SliceDataset(Dataset):
             cfg = augment if not isinstance(augment, bool) else None
             self.augmentor = SliceAugmentor(cfg)
         self.equalize: bool = equalize
+        self.context_slices: int = context_slices
 
         self.test_mode: bool = subset == 'test'
 
@@ -73,18 +77,42 @@ class SliceDataset(Dataset):
     def __len__(self):
         return len(self.files)
 
+    def _get_adjacent_slices(self, img_path: Path, offset: int) -> Path:
+        patient_id, slice_str = img_path.stem.rsplit('_', 1)
+        idx = int(slice_str)
+        step = 1 if offset > 0 else -1
+        # at the top/bottom of the volume, use the closest slice that exists
+        for o in range(offset, 0, -step):
+            p = img_path.parent / f"{patient_id}_{idx + o:04d}.png"
+            if idx + o >= 0 and p.exists():
+                return p
+        return img_path
+
     def __getitem__(self, index) -> dict[str, Union[Tensor, int, str]]:
         img_path, gt_path = self.files[index]
 
-        img_pil = Image.open(img_path)
+        r = self.context_slices // 2
+        slice_paths = [self._get_adjacent_slices(img_path, o) if o != 0 else img_path
+                       for o in range(-r, r + 1)]
+        slices_pil = [Image.open(p) for p in slice_paths]
         gt_pil = Image.open(gt_path) if not self.test_mode else None
 
         # Augment before the tensor transforms, while the label is still a
         # plain image of class indices and has not been one-hot encoded.
         if self.augmentor is not None and not self.test_mode:
-            img_pil, gt_pil = self.augmentor(img_pil, gt_pil)
+            # each slice of the stack needs to get the same random transform
+            # otherwise the neighbours no longer line up with the centre slice.
+            state = np.random.get_state()
+            augmented = []
+            for k, s in enumerate(slices_pil):
+                np.random.set_state(state)
+                s_aug, g_aug = self.augmentor(s, gt_pil)
+                augmented.append(s_aug)
+                if k == r:  
+                    gt_out = g_aug
+            slices_pil, gt_pil = augmented, gt_out
 
-        img: Tensor = self.img_transform(img_pil)
+        img: Tensor = torch.cat([self.img_transform(s) for s in slices_pil], dim=0)
 
         data_dict = {"images": img,
                      "stems": img_path.stem}

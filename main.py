@@ -45,6 +45,7 @@ from functools import partial
 from dataset import SliceDataset
 from ShallowNet import shallowCNN
 from ENet import ENet
+from UNet import UNet
 from utils import (Dcm,
                    class2one_hot,
                    probs2one_hot,
@@ -142,7 +143,14 @@ def setup(args) -> tuple[nn.Module, Any, Any, DataLoader, DataLoader, int]:
     K: int = datasets_params[args.dataset]['K']
     kernels: int = datasets_params[args.dataset]['kernels'] if 'kernels' in datasets_params[args.dataset] else 8
     factor: int = datasets_params[args.dataset]['factor'] if 'factor' in datasets_params[args.dataset] else 2
-    net = datasets_params[args.dataset]['net'](1, K, kernels=kernels, factor=factor)
+    net_cls = datasets_params[args.dataset]['net']
+    if args.network == 'enet':
+        net_cls = ENet
+    elif args.network == 'unet':
+        net_cls = UNet
+
+    # one input channel per stacked slice (1 for 2D, 3 or 5 for 2.5D)
+    net = net_cls(args.context_slices, K, kernels=kernels, factor=factor)
     net.init_weights()
     net.to(device)
 
@@ -160,7 +168,8 @@ def setup(args) -> tuple[nn.Module, Any, Any, DataLoader, DataLoader, int]:
                              img_transform=img_transform,
                              gt_transform=partial(gt_transform, K),
                              augment=args.augment,
-                             debug=args.debug)
+                             debug=args.debug,
+                             context_slices=args.context_slices)
     if args.sampling == "oversample":
         train_loader = DataLoader(train_set,
                                   batch_size=B,
@@ -178,7 +187,8 @@ def setup(args) -> tuple[nn.Module, Any, Any, DataLoader, DataLoader, int]:
                            root_dir,
                            img_transform=img_transform,
                            gt_transform=partial(gt_transform, K),
-                           debug=args.debug)
+                           debug=args.debug,
+                           context_slices=args.context_slices)
     val_loader = DataLoader(val_set,
                             batch_size=B,
                             num_workers=5,
@@ -357,6 +367,12 @@ def main():
                         help="Random affine and elastic deformation on the "
                              "training slices, following the SegTHOR paper. "
                              "Labels are resampled nearest-neighbour.")
+
+    parser.add_argument('--network', default=None, choices=['enet', 'unet'],
+                        help="Override the dataset's default network (ENet for SEGTHOR).")
+    parser.add_argument('--context_slices', default=1, type=int, choices=[1, 3, 5],
+                        help="Number of neighbouring slices stacked as input channels. "
+                             "1 = plain 2D (baseline), 3 or 5 = 2.5D.")
 
     args = parser.parse_args()
 
