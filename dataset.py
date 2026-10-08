@@ -28,6 +28,7 @@ from typing import Callable, Union
 from torch import Tensor
 from PIL import Image
 from torch.utils.data import Dataset
+from augment import SliceAugmentor
 
 
 def make_dataset(root, subset) -> list[tuple[Path, Path | None]]:
@@ -55,7 +56,10 @@ class SliceDataset(Dataset):
         self.root_dir: str = root_dir
         self.img_transform: Callable = img_transform
         self.gt_transform: Callable = gt_transform
-        self.augmentation: bool = augment
+        self.augmentor = None
+        if augment:
+            cfg = augment if not isinstance(augment, bool) else None
+            self.augmentor = SliceAugmentor(cfg)
         self.equalize: bool = equalize
 
         self.test_mode: bool = subset == 'test'
@@ -72,13 +76,20 @@ class SliceDataset(Dataset):
     def __getitem__(self, index) -> dict[str, Union[Tensor, int, str]]:
         img_path, gt_path = self.files[index]
 
-        img: Tensor = self.img_transform(Image.open(img_path))
+        img_pil = Image.open(img_path)
+        gt_pil = Image.open(gt_path) if not self.test_mode else None
+
+        # Augment before the tensor transforms, while the label is still a
+        # plain image of class indices and has not been one-hot encoded.
+        if self.augmentor is not None and not self.test_mode:
+            img_pil, gt_pil = self.augmentor(img_pil, gt_pil)
+
+        img: Tensor = self.img_transform(img_pil)
 
         data_dict = {"images": img,
                      "stems": img_path.stem}
-
         if not self.test_mode:
-            gt: Tensor = self.gt_transform(Image.open(gt_path))
+            gt: Tensor = self.gt_transform(gt_pil)
 
             _, W, H = img.shape
             K, _, _ = gt.shape

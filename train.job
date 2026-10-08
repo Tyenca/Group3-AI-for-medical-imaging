@@ -65,6 +65,14 @@ case "${LOSS}" in
         exit 1
         ;;
 esac
+AUGMENT="${5:-noaug}"
+
+case "${AUGMENT}" in
+    noaug) AUG_FLAG="" ;;
+    aug)   AUG_FLAG="--augment" ;;
+    *) echo "ERROR: augment must be noaug or aug, got '${AUGMENT}'." >&2; exit 1 ;;
+esac
+
 
 SLICE_DIR="data/SEGTHOR_${VARIANT}"
 
@@ -74,6 +82,7 @@ else
     RESULT_DIR="results/${VARIANT}"
 fi
 [ "${LOSS}" != ce ] && RESULT_DIR="${RESULT_DIR}_${LOSS}"
+[ "${AUGMENT}" = aug ] && RESULT_DIR="${RESULT_DIR}_aug"
 RESULT_DIR="${RESULT_DIR}_seed${SEED}"
 
 echo "=== Job $SLURM_JOB_ID: ${VARIANT}, sampling=${SAMPLING}, loss=${LOSS}, seed ${SEED}, $(date) ==="
@@ -118,6 +127,7 @@ python -u main.py \
     --seed "${SEED}" \
     --sampling "${SAMPLING}" \
     --loss "${LOSS}" \
+    ${AUG_FLAG} \
     --track_co2 \
     --gpu
 
