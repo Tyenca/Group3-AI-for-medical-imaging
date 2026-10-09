@@ -4,14 +4,17 @@
 #   sbatch -J base_s1   train.job baseline 1
 #   sbatch -J prep_s1   train.job zscore   1 oversample
 #   sbatch -J dicece_s1 train.job baseline 1 uniform dicece
+#   sbatch -J ctx3_s1   train.job zscore   1 uniform ce noaug 3
 #
-# Arguments: <variant> <seed> [sampling] [loss]
+# Arguments: <variant> <seed> [sampling] [loss] [augment] [context]
 #   variant  which sliced directory to train on (see slice.job)
 #   seed     1, 2 or 3. Always run all three: a single run is not evidence.
 #   sampling uniform (default) or oversample
 #   loss     ce (default), wce, focal or dicece
+#   augment  noaug (default) or aug
+#   context  1 (default, plain 2D), 3 or 5 neighbouring slices as input (2.5D)
 #
-# Results land in results/<variant>[_oversample][_<loss>]_seed<seed>/, so every run is
+# Results land in results/<variant>[_oversample][_<loss>][_ctx<N>][_aug]_seed<seed>/, so every run is
 # self identifying and runs never overwrite each other.
 
 #SBATCH --job-name=ai4mi_train
@@ -73,6 +76,13 @@ case "${AUGMENT}" in
     *) echo "ERROR: augment must be noaug or aug, got '${AUGMENT}'." >&2; exit 1 ;;
 esac
 
+CONTEXT="${6:-1}"
+
+case "${CONTEXT}" in
+    1|3|5) ;;
+    *) echo "ERROR: context must be 1, 3 or 5, got '${CONTEXT}'." >&2; exit 1 ;;
+esac
+
 
 SLICE_DIR="data/SEGTHOR_${VARIANT}"
 
@@ -82,6 +92,7 @@ else
     RESULT_DIR="results/${VARIANT}"
 fi
 [ "${LOSS}" != ce ] && RESULT_DIR="${RESULT_DIR}_${LOSS}"
+[ "${CONTEXT}" != 1 ] && RESULT_DIR="${RESULT_DIR}_ctx${CONTEXT}"
 [ "${AUGMENT}" = aug ] && RESULT_DIR="${RESULT_DIR}_aug"
 RESULT_DIR="${RESULT_DIR}_seed${SEED}"
 
@@ -107,6 +118,8 @@ mkdir -p "${RESULT_DIR}"
     echo "sampling:     ${SAMPLING}"
     echo "seed:         ${SEED}"
     echo "loss:         ${LOSS}"
+    echo "augment:      ${AUGMENT}"
+    echo "context:      ${CONTEXT}"
     echo "slice_dir:    ${SLICE_DIR}"
     echo "epochs:       ${EPOCHS}"
     echo "train_slices: $(ls ${SLICE_DIR}/train/img | wc -l)"
@@ -128,6 +141,7 @@ python -u main.py \
     --sampling "${SAMPLING}" \
     --loss "${LOSS}" \
     ${AUG_FLAG} \
+    --context_slices "${CONTEXT}" \
     --track_co2 \
     --gpu
 
