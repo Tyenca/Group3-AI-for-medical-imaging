@@ -16,9 +16,11 @@ Two things this handles that are easy to get wrong:
    readme wants an archive keyed by patient ID, each mapping to a length-K
    array. The two formats are not interchangeable, so the metrics are rewritten.
 
-    python make_submission.py --run-dir results/zscore_skip_seed1 --group 03
-    python make_submission.py --run-dir results/zscore_skip_seed1 --group 03 \
-        --metrics-sub metrics_cc --test-pred-dir results/zscore_skip_seed1/best_epoch/test
+    python make_submission.py --run-dir results/zscore_seed1 --group 03 \
+        --test-pred-dir results/zscore_seed1/best_epoch/test
+
+On Snellius (not a git checkout) the bundle step is skipped: create it on a
+laptop with `git bundle create group-XX/group-XX.bundle main`.
 """
 
 import argparse
@@ -52,9 +54,11 @@ def main():
     ap.add_argument("--run-dir", type=Path, required=True,
                     help="The run to submit, e.g. results/zscore_skip_seed1")
     ap.add_argument("--group", required=True, help="Group number, e.g. 03")
-    ap.add_argument("--metrics-sub", default="metrics_cc",
-                    help="Which metrics folder inside the run to submit (default metrics_cc)")
-    ap.add_argument("--gt-root", type=Path, default=Path("data/segthor_part1_corrected/train"))
+    ap.add_argument("--metrics-sub", default="metrics",
+                    help="Which metrics folder inside the run to submit (default metrics)")
+    ap.add_argument("--gt-root", type=Path, default=Path("data/segthor_train_full/train"))
+    ap.add_argument("--test-scan-pattern", default="data/segthor_train_full/test/{id_}.nii.gz",
+                    help="Test CT scans, used as the template for the stitched test volumes")
     ap.add_argument("--test-pred-dir", type=Path, default=None,
                     help="Predicted PNG slices for the test set, if it exists yet")
     ap.add_argument("--out", type=Path, default=None)
@@ -114,12 +118,15 @@ def main():
              "--dest_folder", out / "test" / "pred",
              "--num_classes", "255",
              "--grp_regex", r"(Patient_\d\d)_\d\d\d\d",
-             "--source_scan_pattern", str(args.gt_root / "{id_}" / "GT.nii.gz")])
+             "--source_scan_pattern", args.test_scan_pattern])
     else:
         print("   SKIPPED: no test predictions supplied. The submission is incomplete "
               "without them.")
 
     print("\n6. Git bundle")
+    if not Path(".git").exists():
+        print("   SKIPPED: not a git checkout, create the bundle on a laptop")
+        return
     branch = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"],
                             capture_output=True, text=True, check=True).stdout.strip()
     run(["git", "bundle", "create", str(out / f"{tag}.bundle"), branch])
