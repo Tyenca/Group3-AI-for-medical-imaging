@@ -205,7 +205,8 @@ def main(args: argparse.Namespace):
     resolution_dict: dict[str, tuple[float, float, float]] = {}
 
     split_ids: list[str]
-    for mode, split_ids in zip(["train", "val"], [training_ids, validation_ids]):
+    splits = {"train": training_ids, "val": validation_ids, "test": test_ids}
+    for mode, split_ids in ((m, splits[m]) for m in args.splits):
         dest_mode: Path = dest_path / mode
         print(f"Slicing {len(split_ids)} pairs to {dest_mode}")
 
@@ -252,6 +253,10 @@ def get_args() -> argparse.Namespace:
                              "zscore = clip to HU window then z-score")
     parser.add_argument('--hu_window', type=float, nargs=2, default=[-986.0, 271.0],
                         metavar=('MIN', 'MAX'))
+    parser.add_argument('--splits', nargs="+", default=["train", "val"],
+                        choices=["train", "val", "test"],
+                        help="Which splits to slice. The test set has no labels and needs "
+                             "<source_dir>/test/Patient_XX.nii.gz")
     parser.add_argument('--skip_empty', action='store_true',
                         help="Skip slices containing no organ (train/val only)")
     args = parser.parse_args()
