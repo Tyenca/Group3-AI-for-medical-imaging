@@ -142,6 +142,8 @@ def setup(args) -> tuple[nn.Module, Any, Any, DataLoader, DataLoader, int]:
 
     K: int = datasets_params[args.dataset]['K']
     kernels: int = datasets_params[args.dataset]['kernels'] if 'kernels' in datasets_params[args.dataset] else 8
+    if args.kernels:
+        kernels = args.kernels
     factor: int = datasets_params[args.dataset]['factor'] if 'factor' in datasets_params[args.dataset] else 2
     net_cls = datasets_params[args.dataset]['net']
     if args.network == 'enet':
@@ -370,6 +372,9 @@ def main():
 
     parser.add_argument('--network', default=None, choices=['enet', 'unet'],
                         help="Override the dataset's default network (ENet for SEGTHOR).")
+    parser.add_argument('--kernels', default=None, type=int,
+                        help="Base channel width of the network. Defaults to the dataset "
+                             "setting (8 for SEGTHOR).")
     parser.add_argument('--context_slices', default=1, type=int, choices=[1, 3, 5],
                         help="Number of neighbouring slices stacked as input channels. "
                              "1 = plain 2D (baseline), 3 or 5 = 2.5D.")
