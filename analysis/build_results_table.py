@@ -12,7 +12,8 @@ A run is any folder holding run_config.txt and metrics/. To add your runs,
 copy metrics/*.npz, run_config.txt and emissions.csv of each run into
 runs/<run name>/. The config name is the
 folder name without its _seedN suffix. The baseline is the config with variant
-baseline, uniform sampling, ce loss, no augmentation, 1 context slice and ENet.
+baseline, uniform sampling, ce loss, no augmentation, 1 context slice and ENet
+with base width 8.
 """
 
 import argparse
@@ -24,9 +25,9 @@ import pandas as pd
 
 METRICS = ["dice_3d", "hd95_3d", "assd_3d", "cldice_3d"]
 ORGANS = ["esophagus", "heart", "trachea", "aorta"]
-SETTINGS = ["variant", "sampling", "loss", "augment", "context", "network"]
+SETTINGS = ["variant", "sampling", "loss", "augment", "context", "network", "kernels"]
 BASELINE = {"variant": "baseline", "sampling": "uniform", "loss": "ce",
-            "augment": "noaug", "context": "1", "network": "enet"}
+            "augment": "noaug", "context": "1", "network": "enet", "kernels": "8"}
 
 
 def read_config(run: Path) -> dict:
