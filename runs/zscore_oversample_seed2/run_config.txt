@@ -1,0 +1,11 @@
+variant:      zscore
+sampling:     oversample
+seed:         2
+loss:         ce
+slice_dir:    data/SEGTHOR_zscore
+epochs:       50
+train_slices: 6027
+val_slices:   1393
+git_commit:   68967c1
+slurm_job:    27795214
+started:      Fri Oct  9 08:45:45 CEST 2026

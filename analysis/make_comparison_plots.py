@@ -4,7 +4,7 @@ Run directories are discovered by glob, so this works with one run per config or
 with three seeds each, without editing anything. A config with a single run is
 drawn without error bars, since it has no spread to report.
 
-    python make_comparison_plots.py
+    python analysis/make_comparison_plots.py
 """
 
 from pathlib import Path

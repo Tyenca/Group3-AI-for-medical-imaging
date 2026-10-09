@@ -35,7 +35,9 @@ import numpy as np
 import torch.nn.functional as F
 from torch import nn, Tensor
 from torchvision import transforms
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, WeightedRandomSampler
+from augment import SliceAugmentor
+from PIL import Image
 import random, pickle
 
 from functools import partial 
@@ -43,6 +45,7 @@ from functools import partial
 from dataset import SliceDataset
 from ShallowNet import shallowCNN
 from ENet import ENet
+from UNet import UNet
 from utils import (Dcm,
                    class2one_hot,
                    probs2one_hot,
@@ -51,7 +54,7 @@ from utils import (Dcm,
                    dice_coef,
                    save_images)
 
-from losses import (CrossEntropy)
+from losses import (CrossEntropy, DiceCE)
 
 # Worker initialization function for DataLoader reproducibility
 def worker_init_fn(worker_id):
@@ -84,6 +87,51 @@ def gt_transform(K, img):
         img = class2one_hot(img, K=K)
         return img[0]
 
+def class_weights(dataset) -> Tensor:
+    # ENet paper weighting, w = 1 / ln(1.02 + class frequency), counted on the training split only
+    counts = sum(dataset.gt_transform(Image.open(gt)).sum((1, 2)) for _, gt in dataset.files)
+    weights = 1 / torch.log(1.02 + counts / counts.sum())
+    print(f">> Class weights {weights.tolist()}")
+    return weights
+
+def foreground_flags(dataset) -> np.ndarray:
+    """True for each slice whose ground truth contains at least one organ.
+
+    The GT PNGs hold the x63 encoding, so any non-zero pixel means an
+    organ is present and no decoding is needed.
+    """
+    flags = np.zeros(len(dataset.files), dtype=bool)
+    for i, (_, gt_path) in enumerate(dataset.files):
+        flags[i] = bool(np.any(np.array(Image.open(gt_path)) > 0))
+    return flags
+
+
+def build_sampler(dataset, fg_ratio: float, seed: int) -> WeightedRandomSampler:
+    """Draw roughly `fg_ratio` of each batch from slices containing an organ.
+
+    Unlike dropping empty slices, the model still sees empty space, so it
+    keeps learning to predict nothing there. One epoch still draws
+    len(dataset) slices, so the number of gradient steps is unchanged and
+    the comparison against the baseline stays fair.
+    """
+    fg = foreground_flags(dataset)
+    n_fg, n_bg = int(fg.sum()), int((~fg).sum())
+    print(f">> Sampler: {n_fg} slices with an organ, {n_bg} without; "
+          f"targeting {fg_ratio:.0%} foreground per batch")
+
+    if n_fg == 0 or n_bg == 0:
+        raise ValueError("Oversampling needs both foreground and empty slices. "
+                         "Was this dataset sliced with --skip_empty?")
+
+    weights = np.where(fg, fg_ratio / n_fg, (1.0 - fg_ratio) / n_bg)
+
+    g = torch.Generator()
+    g.manual_seed(seed)
+    return WeightedRandomSampler(
+        weights=torch.as_tensor(weights, dtype=torch.double),
+        num_samples=len(dataset),
+        replacement=True,
+        generator=g)
 def setup(args) -> tuple[nn.Module, Any, Any, DataLoader, DataLoader, int]:
 
 
@@ -95,7 +143,14 @@ def setup(args) -> tuple[nn.Module, Any, Any, DataLoader, DataLoader, int]:
     K: int = datasets_params[args.dataset]['K']
     kernels: int = datasets_params[args.dataset]['kernels'] if 'kernels' in datasets_params[args.dataset] else 8
     factor: int = datasets_params[args.dataset]['factor'] if 'factor' in datasets_params[args.dataset] else 2
-    net = datasets_params[args.dataset]['net'](1, K, kernels=kernels, factor=factor)
+    net_cls = datasets_params[args.dataset]['net']
+    if args.network == 'enet':
+        net_cls = ENet
+    elif args.network == 'unet':
+        net_cls = UNet
+
+    # one input channel per stacked slice (1 for 2D, 3 or 5 for 2.5D)
+    net = net_cls(args.context_slices, K, kernels=kernels, factor=factor)
     net.init_weights()
     net.to(device)
 
@@ -111,20 +166,29 @@ def setup(args) -> tuple[nn.Module, Any, Any, DataLoader, DataLoader, int]:
     train_set = SliceDataset('train',
                              root_dir,
                              img_transform=img_transform,
-                             gt_transform= partial(gt_transform, K),
-                             debug=args.debug)
-    
-    train_loader = DataLoader(train_set,
-                            batch_size=B,
-                            num_workers=5,
-                            shuffle=True,
-                            worker_init_fn=worker_init_fn)
+                             gt_transform=partial(gt_transform, K),
+                             augment=args.augment,
+                             debug=args.debug,
+                             context_slices=args.context_slices)
+    if args.sampling == "oversample":
+        train_loader = DataLoader(train_set,
+                                  batch_size=B,
+                                  num_workers=5,
+                                  sampler=build_sampler(train_set, args.fg_ratio, args.seed),
+                                  worker_init_fn=worker_init_fn)
+    else:
+        train_loader = DataLoader(train_set,
+                                  batch_size=B,
+                                  num_workers=5,
+                                  shuffle=True,
+                                  worker_init_fn=worker_init_fn)
 
     val_set = SliceDataset('val',
                            root_dir,
                            img_transform=img_transform,
                            gt_transform=partial(gt_transform, K),
-                           debug=args.debug)
+                           debug=args.debug,
+                           context_slices=args.context_slices)
     val_loader = DataLoader(val_set,
                             batch_size=B,
                             num_workers=5,
@@ -134,9 +198,9 @@ def setup(args) -> tuple[nn.Module, Any, Any, DataLoader, DataLoader, int]:
     args.dest.mkdir(parents=True, exist_ok=True)
 
     # Extract and save train/val split
-    train_patient_ids = sorted(set(Path(f[0]).stem.split('_')[0] for f in train_set.files))
-    val_patient_ids = sorted(set(Path(f[0]).stem.split('_')[0] for f in val_set.files))
-
+    train_patient_ids = sorted(set(Path(f[0]).stem.rsplit('_', 1)[0] for f in train_set.files))
+    val_patient_ids = sorted(set(Path(f[0]).stem.rsplit('_', 1)[0] for f in val_set.files))
+    
     split_dict = {
         'train': train_patient_ids,
         'val': val_patient_ids,
@@ -154,11 +218,21 @@ def runTraining(args):
     net, optimizer, device, train_loader, val_loader, K = setup(args)
 
     if args.mode == "full":
-        loss_fn = CrossEntropy(idk=list(range(K)))  # Supervise both background and foreground
+        idk = list(range(K))  # Supervise both background and foreground
     elif args.mode in ["partial"] and args.dataset == 'SEGTHOR':
-        loss_fn = CrossEntropy(idk=[0, 1, 3, 4])  # Do not supervise the heart (class 2)
+        idk = [0, 1, 3, 4]  # Do not supervise the heart (class 2)
     else:
         raise ValueError(args.mode, args.dataset)
+
+    match args.loss:
+        case 'ce':
+            loss_fn = CrossEntropy(idk=idk)
+        case 'wce':
+            loss_fn = CrossEntropy(idk=idk, weights=class_weights(train_loader.dataset).to(device))
+        case 'focal':
+            loss_fn = CrossEntropy(idk=idk, gamma=2)
+        case 'dicece':
+            loss_fn = DiceCE(idk=idk)
 
     # Notice one has the length of the _loader_, and the other one of the _dataset_
     log_loss_tra: Tensor = torch.zeros((args.epochs, len(train_loader)))
@@ -263,10 +337,15 @@ def main():
     parser.add_argument('--epochs', default=20, type=int)
     parser.add_argument('--dataset', default='TOY2', choices=datasets_params.keys())
     parser.add_argument('--mode', default='full', choices=['partial', 'full'])
+    parser.add_argument('--loss', default='ce', choices=['ce', 'wce', 'focal', 'dicece'],
+                        help="ce is the baseline. wce weights classes by training frequency, "
+                             "focal uses gamma 2, dicece adds soft Dice to ce.")
     parser.add_argument('--dest', type=Path, required=True,
                         help="Destination directory to save the results (predictions and weights).")
 
     parser.add_argument('--gpu', action='store_true')
+    parser.add_argument("--track_co2", action="store_true", 
+                        help="Track energy use and CO2 emissions during the run.")
     parser.add_argument('--debug', action='store_true',
                         help="Keep only a fraction (10 samples) of the datasets, "
                              "to test the logics around epochs and logging easily.")
@@ -277,6 +356,23 @@ def main():
                         help="Seed for weight init and batch shuffling. Without it, two runs "
                              "of the same config differ, and a gap between configs cannot be "
                              "told apart from run-to-run noise.")
+    parser.add_argument('--sampling', default='uniform',
+                        choices=['uniform', 'oversample'],
+                        help="uniform = every slice equally likely (default); "
+                             "oversample = draw foreground slices more often")
+    parser.add_argument('--fg_ratio', type=float, default=0.66,
+                        help="Target fraction of each batch containing an organ")
+
+    parser.add_argument('--augment', action='store_true',
+                        help="Random affine and elastic deformation on the "
+                             "training slices, following the SegTHOR paper. "
+                             "Labels are resampled nearest-neighbour.")
+
+    parser.add_argument('--network', default=None, choices=['enet', 'unet'],
+                        help="Override the dataset's default network (ENet for SEGTHOR).")
+    parser.add_argument('--context_slices', default=1, type=int, choices=[1, 3, 5],
+                        help="Number of neighbouring slices stacked as input channels. "
+                             "1 = plain 2D (baseline), 3 or 5 = 2.5D.")
 
     args = parser.parse_args()
 
@@ -287,7 +383,24 @@ def main():
 
     pprint(args)
 
-    runTraining(args)
+    if args.track_co2:
+        from codecarbon import OfflineEmissionsTracker, OutputMethod
+
+        args.dest.mkdir(parents=True, exist_ok=True)
+        tracker = OfflineEmissionsTracker(project_name="Medical Imaging Segmentation", country_iso_code="NLD", 
+                                          output_dir=str(args.dest), output_file="emissions.csv", 
+                                          output_methods=[OutputMethod.CSV], measure_power_secs=10)
+        tracker.start()
+
+        try:
+            runTraining(args)
+        finally:
+            emissions = tracker.stop()
+
+        if emissions is not None:
+            print(f"Total CO2 emissions: {emissions:.6f} kg CO2eq")
+    else:
+        runTraining(args)
 
 
 if __name__ == '__main__':
