@@ -1,0 +1,11 @@
+variant:      baseline
+sampling:     uniform
+seed:         2
+loss:         ce
+slice_dir:    data/SEGTHOR_baseline
+epochs:       50
+train_slices: 6027
+val_slices:   1393
+git_commit:   68967c1
+slurm_job:    27793128
+started:      Fri Oct  9 02:30:39 CEST 2026
