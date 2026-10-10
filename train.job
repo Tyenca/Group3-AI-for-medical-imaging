@@ -6,8 +6,9 @@
 #   sbatch -J dicece_s1 train.job baseline 1 uniform dicece
 #   sbatch -J ctx3_s1   train.job zscore   1 uniform ce noaug 3
 #   sbatch -J unet_s1   train.job zscore   1 uniform ce noaug 1 unet
+#   sbatch -J unet16_s1 train.job zscore   1 uniform ce noaug 1 unet 16
 #
-# Arguments: <variant> <seed> [sampling] [loss] [augment] [context] [network]
+# Arguments: <variant> <seed> [sampling] [loss] [augment] [context] [network] [kernels]
 #   variant  which sliced directory to train on (see slice.job)
 #   seed     1, 2 or 3. Always run all three: a single run is not evidence.
 #   sampling uniform (default) or oversample
@@ -15,8 +16,9 @@
 #   augment  noaug (default) or aug
 #   context  1 (default, plain 2D), 3 or 5 neighbouring slices as input (2.5D)
 #   network  enet (default, the baseline network) or unet
+#   kernels  base channel width, 8 (default, as the baseline) or e.g. 16
 #
-# Results land in results/<variant>[_oversample][_<loss>][_unet][_ctx<N>][_aug]_seed<seed>/, so every run is
+# Results land in results/<variant>[_oversample][_<loss>][_unet][_k<N>][_ctx<N>][_aug]_seed<seed>/, so every run is
 # self identifying and runs never overwrite each other.
 
 #SBATCH --job-name=ai4mi_train
@@ -92,6 +94,12 @@ case "${NETWORK}" in
     *) echo "ERROR: network must be enet or unet, got '${NETWORK}'." >&2; exit 1 ;;
 esac
 
+KERNELS="${8:-8}"
+
+case "${KERNELS}" in
+    ''|*[!0-9]*) echo "ERROR: kernels must be a number, got '${KERNELS}'." >&2; exit 1 ;;
+esac
+
 
 SLICE_DIR="data/SEGTHOR_${VARIANT}"
 
@@ -102,6 +110,7 @@ else
 fi
 [ "${LOSS}" != ce ] && RESULT_DIR="${RESULT_DIR}_${LOSS}"
 [ "${NETWORK}" != enet ] && RESULT_DIR="${RESULT_DIR}_${NETWORK}"
+[ "${KERNELS}" != 8 ] && RESULT_DIR="${RESULT_DIR}_k${KERNELS}"
 [ "${CONTEXT}" != 1 ] && RESULT_DIR="${RESULT_DIR}_ctx${CONTEXT}"
 [ "${AUGMENT}" = aug ] && RESULT_DIR="${RESULT_DIR}_aug"
 RESULT_DIR="${RESULT_DIR}_seed${SEED}"
@@ -131,6 +140,7 @@ mkdir -p "${RESULT_DIR}"
     echo "augment:      ${AUGMENT}"
     echo "context:      ${CONTEXT}"
     echo "network:      ${NETWORK}"
+    echo "kernels:      ${KERNELS}"
     echo "slice_dir:    ${SLICE_DIR}"
     echo "epochs:       ${EPOCHS}"
     echo "train_slices: $(ls ${SLICE_DIR}/train/img | wc -l)"
@@ -154,6 +164,7 @@ python -u main.py \
     ${AUG_FLAG} \
     --context_slices "${CONTEXT}" \
     --network "${NETWORK}" \
+    --kernels "${KERNELS}" \
     --track_co2 \
     --gpu
 
