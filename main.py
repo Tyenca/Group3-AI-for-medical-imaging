@@ -154,9 +154,34 @@ def setup(args) -> tuple[nn.Module, Any, Any, DataLoader, DataLoader, int]:
     net.init_weights()
     net.to(device)
 
-    lr = 0.0005
-    optimizer = torch.optim.Adam(net.parameters(), lr=lr, betas=(0.9, 0.999))
+    # optimizer
+    lr = args.lr
+    if args.optimizer == 'adam':
+        optimizer = torch.optim.Adam(
+            net.parameters(),
+            lr=lr,
+            betas=(0.9, 0.999),
+        )
 
+    elif args.optimizer == 'adamw':
+        optimizer = torch.optim.AdamW(
+            net.parameters(),
+            lr=lr,
+            betas=(0.9, 0.999),
+        )
+
+    elif args.optimizer == 'sgd':
+        optimizer = torch.optim.SGD(
+            net.parameters(),
+            lr=lr,
+            momentum=0.9,
+        )   
+
+    else: raise ValueError(f"Unknown optimizer {args.optimizer}")
+    print(f">> Using {args.optimizer} optimizer with learning rate {lr}")
+
+
+    
     # Dataset part
     B: int = datasets_params[args.dataset]['B']
     # --data_dir lets two preprocessing variants of the same dataset live side by
@@ -370,6 +395,10 @@ def main():
 
     parser.add_argument('--network', default=None, choices=['enet', 'unet'],
                         help="Override the dataset's default network (ENet for SEGTHOR).")
+    parser.add_argument('--optimizer', default='adam', choices=['adam','adamw','sgd'],
+                        help='Optimizer to use for training')
+    parser.add_argument('--lr', default=0.0005, type=float,
+                        help='Learning rate')
     parser.add_argument('--context_slices', default=1, type=int, choices=[1, 3, 5],
                         help="Number of neighbouring slices stacked as input channels. "
                              "1 = plain 2D (baseline), 3 or 5 = 2.5D.")
