@@ -11,7 +11,8 @@
 #
 # Arguments: <variant> <seed> [sampling] [loss] [augment] [context] [network] [kernels]
 #            [optimizer] [lr] [scheduler] [select] [position]
-#   variant  which sliced directory to train on (see slice.job)
+#   variant  which sliced directory to train on (see slice.job); crop trains
+#            the stage 2 esophagus network, scored afterwards by refine.job
 #   seed     1, 2 or 3. Always run all three: a single run is not evidence.
 #   sampling uniform (default) or oversample
 #   loss     ce (default), wce, focal, dicece or cldice
@@ -58,9 +59,9 @@ SAMPLING="${3:-uniform}"
 LOSS="${4:-ce}"
 
 case "${VARIANT}" in
-    baseline|zscore|zscore_skip|multiwindow) ;;
+    baseline|zscore|zscore_skip|multiwindow|crop) ;;
     *)
-        echo "ERROR: unknown variant '${VARIANT}'. Use baseline, zscore, zscore_skip or multiwindow." >&2
+        echo "ERROR: unknown variant '${VARIANT}'. Use baseline, zscore, zscore_skip, multiwindow or crop." >&2
         exit 1
         ;;
 esac
@@ -215,11 +216,17 @@ python -u main.py \
     --track_co2 \
     --gpu
 
-echo ">>> Computing 3D metrics"
-python -u metrics_3d.py \
-    --pred-dir "${RESULT_DIR}/best_epoch/val" \
-    --gt-dir "${SLICE_DIR}/val/gt" \
-    --spacing-pkl "${SLICE_DIR}/spacing.pkl" \
-    --out-dir "${RESULT_DIR}/metrics"
+if [ "${VARIANT}" = crop ]; then
+    # windows of a stage 2 network are no whole volumes: score them after
+    # merging into stage 1, with refine.job
+    echo ">>> Stage 2 network: no 3D metrics here, run refine.job next"
+else
+    echo ">>> Computing 3D metrics"
+    python -u metrics_3d.py \
+        --pred-dir "${RESULT_DIR}/best_epoch/val" \
+        --gt-dir "${SLICE_DIR}/val/gt" \
+        --spacing-pkl "${SLICE_DIR}/spacing.pkl" \
+        --out-dir "${RESULT_DIR}/metrics"
+fi
 
 echo "=== Job $SLURM_JOB_ID finished at $(date) ==="
