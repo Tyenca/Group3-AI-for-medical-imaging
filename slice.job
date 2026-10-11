@@ -4,6 +4,7 @@
 #   sbatch slice.job baseline
 #   sbatch slice.job zscore
 #   sbatch slice.job multiwindow
+#   sbatch slice.job crop          (native resolution esophagus windows, stage 2)
 #
 # Each variant writes to its own directory, so several can exist side by side
 # and be trained at the same time without overwriting each other.
@@ -40,7 +41,7 @@ source $HOME/ai4mi_venv/bin/activate
 
 cd "${SLURM_SUBMIT_DIR:-$HOME/Group3-AI-for-medical-imaging}"
 
-VARIANT="${1:?Usage: sbatch slice.job <baseline|zscore|multiwindow|zscore_skip>}"
+VARIANT="${1:?Usage: sbatch slice.job <baseline|zscore|multiwindow|zscore_skip|crop>}"
 
 case "${VARIANT}" in
     baseline)
@@ -64,8 +65,14 @@ case "${VARIANT}" in
         # slices. Kept so the two approaches to class balance can be compared.
         SLICE_FLAGS="--norm_mode zscore --skip_empty"
         ;;
+    crop)
+        # Not a slicing of whole images: 128x128 windows at native 512
+        # resolution around the ground truth esophagus, for the stage 2
+        # refinement network (see crop_esophagus.py).
+        SLICE_FLAGS=""
+        ;;
     *)
-        echo "ERROR: unknown variant '${VARIANT}'. Use baseline, zscore, multiwindow or zscore_skip." >&2
+        echo "ERROR: unknown variant '${VARIANT}'. Use baseline, zscore, multiwindow, zscore_skip or crop." >&2
         exit 1
         ;;
 esac
@@ -88,14 +95,24 @@ if [ -d "${SLICE_DIR}" ]; then
     rm -rf "${SLICE_DIR}"
 fi
 
-python -u slice_segthor.py \
-    --source_dir "${SRC_DIR}" \
-    --dest_dir "${SLICE_DIR}" \
-    --shape ${SHAPE} \
-    --retains ${RETAINS} \
-    --seed ${SEED} \
-    --process -1 \
-    ${SLICE_FLAGS}
+if [ "${VARIANT}" = crop ]; then
+    python -u crop_esophagus.py \
+        --source_dir "${SRC_DIR}" \
+        --dest_dir "${SLICE_DIR}" \
+        --retains ${RETAINS} \
+        --seed ${SEED} \
+        --splits train val \
+        --centers gt
+else
+    python -u slice_segthor.py \
+        --source_dir "${SRC_DIR}" \
+        --dest_dir "${SLICE_DIR}" \
+        --shape ${SHAPE} \
+        --retains ${RETAINS} \
+        --seed ${SEED} \
+        --process -1 \
+        ${SLICE_FLAGS}
+fi
 
 echo ">>> Slice counts (everyone using the same parameters must get these):"
 echo "    train img: $(ls ${SLICE_DIR}/train/img | wc -l)"

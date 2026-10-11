@@ -1,0 +1,81 @@
+#!/bin/bash
+# Two-stage esophagus refinement on the validation set, for one seed.
+#
+#   sbatch -J refine_s1 refine.job 1
+#   sbatch -J refine_s1 refine.job 1 results/zscore_unet_k16_aug_seed1
+#
+# Needs a trained stage 1 run (default UNet 16 + aug of the same seed) and a
+# trained stage 2 run, results/crop_unet_k16_aug_seed<seed> (train.job crop).
+# Stage 1 seed N is paired with stage 2 seed N.
+#
+#   1. windows around the esophagus that stage 1 predicted (crop_esophagus.py)
+#   2. stage 2 predicts those windows at native resolution (predict.py)
+#   3. its esophagus goes back into stage 1 (merge_refine.py)
+#   4. stage 1 alone and the refined result, both scored against the native
+#      512 labels (metrics_3d.py --gt-nifti-root), so the comparison is fair
+#
+# Results land in results/refine_seed<seed>/metrics_stage1 and metrics_refined.
+
+#SBATCH --job-name=ai4mi_refine
+#SBATCH --account=gpuuva084
+#SBATCH --partition=gpu_a100
+#SBATCH --gpus=1
+#SBATCH --cpus-per-task=9
+#SBATCH --time=02:00:00
+#SBATCH --output=slurm_logs/%x_%j.out
+#SBATCH --error=slurm_logs/%x_%j.err
+
+set -e
+
+mkdir -p slurm_logs
+
+module purge
+module load 2023
+module load Python/3.11.3-GCCcore-12.3.0
+
+source $HOME/ai4mi_venv/bin/activate
+
+cd "${SLURM_SUBMIT_DIR:-$HOME/Group3-AI-for-medical-imaging}"
+
+SEED="${1:?Usage: sbatch refine.job <seed> [stage 1 run dir]}"
+STAGE1="${2:-results/zscore_unet_k16_aug_seed${SEED}}"
+STAGE2="results/crop_unet_k16_aug_seed${SEED}"
+SRC_DIR="data/segthor_train_full"
+CROP_DIR="data/SEGTHOR_crop_s1seed${SEED}"
+OUT="results/refine_seed${SEED}"
+
+for f in "${STAGE1}/best_epoch/val" "${STAGE2}/bestmodel.pkl"; do
+    [ -e "$f" ] || { echo "ERROR: ${f} not found." >&2; exit 1; }
+done
+
+echo "=== Job $SLURM_JOB_ID: refine seed ${SEED}, stage 1 ${STAGE1}, $(date) ==="
+rm -rf "${CROP_DIR}" "${OUT}"
+mkdir -p "${OUT}"
+{
+    echo "seed:         ${SEED}"
+    echo "stage1:       ${STAGE1}"
+    echo "stage2:       ${STAGE2}"
+    echo "git_commit:   $(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+    echo "slurm_job:    ${SLURM_JOB_ID}"
+    echo "started:      $(date)"
+} > "${OUT}/run_config.txt"
+
+echo ">>> 1. Windows around the stage 1 esophagus"
+python -u crop_esophagus.py --source_dir "${SRC_DIR}" --dest_dir "${CROP_DIR}" \
+    --retains 8 --seed 42 --splits val --centers "${STAGE1}/best_epoch/val"
+
+echo ">>> 2. Stage 2 predictions"
+python -u predict.py --model "${STAGE2}/bestmodel.pkl" --data_dir "${CROP_DIR}" \
+    --subset val --dest "${OUT}/stage2" --gpu
+
+echo ">>> 3. Merge"
+python -u merge_refine.py --stage1 "${STAGE1}/best_epoch/val" --stage2 "${OUT}/stage2" \
+    --boxes "${CROP_DIR}/val/boxes.json" --dest "${OUT}"
+
+for v in stage1 refined; do
+    echo ">>> 4. Native resolution metrics: ${v}"
+    python -u metrics_3d.py --pred-dir "${OUT}/${v}" --gt-nifti-root "${SRC_DIR}/train" \
+        --out-dir "${OUT}/metrics_${v}"
+done
+
+echo "=== Job $SLURM_JOB_ID finished at $(date) ==="
