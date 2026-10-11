@@ -1,8 +1,8 @@
 #!/bin/bash
 # Two-stage esophagus refinement on the validation set, for one seed.
 #
-#   sbatch -J refine_s1 refine.job 1
-#   sbatch -J refine_s1 refine.job 1 results/zscore_unet_k16_aug_seed1
+#   sbatch -J refine_s1   refine.job 1
+#   sbatch -J refine3d_s1 refine.job 1 results/zscore_3d_seed1
 #
 # Needs a trained stage 1 run (default UNet 16 + aug of the same seed) and a
 # trained stage 2 run, results/crop_unet_k16_aug_seed<seed> (train.job crop).
@@ -14,7 +14,8 @@
 #   4. stage 1 alone and the refined result, both scored against the native
 #      512 labels (metrics_3d.py --gt-nifti-root), so the comparison is fair
 #
-# Results land in results/refine_seed<seed>/metrics_stage1 and metrics_refined.
+# Results land in results/refine_<stage 1 run name>/metrics_stage1 and
+# metrics_refined, so refining different stage 1 models never overwrites.
 
 #SBATCH --job-name=ai4mi_refine
 #SBATCH --account=gpuuva084
@@ -41,8 +42,9 @@ SEED="${1:?Usage: sbatch refine.job <seed> [stage 1 run dir]}"
 STAGE1="${2:-results/zscore_unet_k16_aug_seed${SEED}}"
 STAGE2="results/crop_unet_k16_aug_seed${SEED}"
 SRC_DIR="data/segthor_train_full"
-CROP_DIR="data/SEGTHOR_crop_s1seed${SEED}"
-OUT="results/refine_seed${SEED}"
+NAME="$(basename "${STAGE1}")"
+CROP_DIR="data/SEGTHOR_crop_${NAME}"
+OUT="results/refine_${NAME}"
 
 for f in "${STAGE1}/best_epoch/val" "${STAGE2}/bestmodel.pkl"; do
     [ -e "$f" ] || { echo "ERROR: ${f} not found." >&2; exit 1; }
